@@ -72,7 +72,12 @@ void Error_Handler(void);
 #define LD3_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+#define RECBUF 1							// number of bytes for UART receiving buffer
+#define FRAMELEN 28							// frame length and max. message length
+#define TIMEOUT 1000						// timeout for UART transmission
+#define MYEOF '\n'							// end-of-frame
+#define ACK "ACK\n"
+#define NACK "NACK\n"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

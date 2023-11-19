@@ -18,22 +18,17 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <frame_func.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdbool.h>
-#include "frame.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#define RECBUF 1
-#define FRAMELEN 28
-#define TIMEOUT 1000
-#define MY_EOF '\n'
-#define ACK "ACK\n"
-#define NACK "NACK\n"
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -48,19 +43,16 @@
 
 /* Private variables ---------------------------------------------------------*/
 RNG_HandleTypeDef hrng;
-
 TIM_HandleTypeDef htim6;
-
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 void(*tim6_cb)(void);									// function pointer for tim6 callback
-uint8_t receiveByte;
-char frame[FRAMELEN];
-char response[FRAMELEN];
+uint8_t rec_byte;										// buffer for UART receive
+char receive_frame[FRAMELEN];							// string for UART received messages
 bool eof_bool = false;
 bool ack_bool = false;
-uint8_t frameIndex = 0;
+uint8_t frame_index = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -71,7 +63,9 @@ static void MX_RNG_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 
-void _tim_timeout_nonblocking_with_callback(uint32_t time_ms, void(*func)(void));
+void send(char* message);
+void receive();
+void led_set_nonblocking_with_callback(uint32_t time_ms, void(*func)(void), uint16_t led);
 void reset_led();
 
 /* USER CODE END PFP */
@@ -115,7 +109,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);	// green
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);	// red
-  char *readyMsg = "\n\nREADY\n";
+  char *ready_msg = "\n\nREADY\n";
+  char reply_frame[FRAMELEN];
   uint32_t timeout = 100;
   /* USER CODE END 2 */
 
@@ -123,62 +118,36 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	if (HAL_UART_Transmit(&huart2, (uint8_t *)readyMsg, strlen(readyMsg), TIMEOUT)  == HAL_ERROR) {				//ready
+	send(ready_msg);
+
+	receive();
+
+	if (frame_check(receive_frame) == true) {
+		led_set_nonblocking_with_callback(timeout, reset_led, GPIO_PIN_8);
+		send(ACK);
+
+	if (frame_number_gen(receive_frame, reply_frame, hrng) == false) {
 		Error_Handler();
 	}
+	send(reply_frame);
 
-	while (eof_bool == false) {
-		if (HAL_UART_Receive_IT (&huart2, &receiveByte, RECBUF) == HAL_ERROR) {									// read
-			Error_Handler();
-		}
-	}
-	eof_bool = false;
-
-
-	if (frame_check(frame) == true) {
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);												// short led in case of yes
-		_tim_timeout_nonblocking_with_callback(timeout, reset_led);
-	char* send = frame_number_gen(frame, hrng);
-	strcpy(response, send);
-	if (HAL_UART_Transmit(&huart2, (uint8_t *)ACK, strlen(ACK), TIMEOUT) == HAL_ERROR) {			// first ack, then reply
-		Error_Handler();
-	}
-
-	if (HAL_UART_Transmit(&huart2, (uint8_t *)send, strlen(send), TIMEOUT) == HAL_ERROR) {
-		Error_Handler();
-	}
 	} else {
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);												// short led in case of yes
-		_tim_timeout_nonblocking_with_callback(timeout, reset_led);
-		if (HAL_UART_Transmit(&huart2, (uint8_t *)NACK, strlen(NACK), TIMEOUT) == HAL_ERROR) {		// or nack -> back to start!
-			Error_Handler();
-		}
+		led_set_nonblocking_with_callback(timeout, reset_led, GPIO_PIN_6);
+		send(NACK);
 		continue;
 	}
 
 	do {
-	while (eof_bool == false) {
-		if (HAL_UART_Receive_IT (&huart2, &receiveByte, RECBUF) == HAL_ERROR) {					// read input for #ACK\n
-			Error_Handler();
-		}
-	}
-	eof_bool = false;
+		receive();
 
-	ack_bool = ack_check(frame);
+		ack_bool = ack_check(receive_frame);
 
-	if (ack_bool == false){
-		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);												// short led in case of yes
-		_tim_timeout_nonblocking_with_callback(timeout, reset_led);
-		if (HAL_UART_Transmit(&huart2, (uint8_t *)response, strlen(response), TIMEOUT) == HAL_ERROR) {	// resend reply
-			Error_Handler();
+		if (ack_bool == false){
+			led_set_nonblocking_with_callback(timeout, reset_led, GPIO_PIN_6);
+			send(reply_frame);
 		}
-	}
 	} while (ack_bool == false);
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);												// short led in case of yes
-	_tim_timeout_nonblocking_with_callback(timeout, reset_led);
-
-
-
+	led_set_nonblocking_with_callback(timeout, reset_led, GPIO_PIN_8);
 
     /* USER CODE END WHILE */
 
@@ -387,31 +356,64 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+ * @brief 	Wrapper function for UART transmitting function.
+ * @param 	message: String to be sent.
+ * @retval 	None
+ */
+void send(char* message) {
+	if (HAL_UART_Transmit(&huart2, (uint8_t *)message, strlen(message), TIMEOUT)  == HAL_ERROR) {
+		Error_Handler();
+	}
+}
+
+/**
+ * @brief 	Wrapper function for UART receiving function.
+ * @param 	None
+ * @retval	None
+ */
+void receive() {
+	while (eof_bool == false) {
+		if (HAL_UART_Receive_IT (&huart2, &rec_byte, RECBUF) == HAL_ERROR) {									// read
+			Error_Handler();
+		}
+	}
+	eof_bool = false;
+}
+
+/**
+ * @brief 	UART receiving callback function. Copies each received byte into string "receive_frame".
+ * 			Upon receiving end-of-frame "MYEOF" puts string terminator.
+ * @param 	huart: 	UART handle.
+ * @retval	None
+ */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart2) {
-		frame[frameIndex] = receiveByte;
+		receive_frame[frame_index] = rec_byte;
 
-		if (frameIndex == FRAMELEN) {
-			frameIndex = 0;
+		if (frame_index == FRAMELEN) {
+			frame_index = 0;
 		}
-		frameIndex++;
+		frame_index++;
 
-
-	//	char check[1];
-	//	check[0] = (int)receiveByte;
-	//	if (strcmp(check, EOF) == 0) {
-	//		if (strcmp(&receiveByte, EOF) == 0) {
-		if (receiveByte == MY_EOF) {
-//			frame[frameIndex] = '\n';
-			frame[frameIndex] = '\0';
-			frameIndex = 0;
+		if (rec_byte == MYEOF) {
+			receive_frame[frame_index] = '\0';
+			frame_index = 0;
 			eof_bool = true;
 		}
 	}
 
 }
 
-void _tim_timeout_nonblocking_with_callback(uint32_t time_ms, void(*func)(void)) {
+/**
+ * @brief 	Sets LED and starts timer TIM6.
+ * @param 	time_ms: 	Time in ms for timer.
+ * @param 	func: 		Function pointer to be used with callback.
+ * @param 	led: 		GPIO_PIN Macro
+ * @retval	None
+ */
+void led_set_nonblocking_with_callback(uint32_t time_ms, void(*func)(void), uint16_t led) {
+	HAL_GPIO_WritePin(GPIOA, led, GPIO_PIN_RESET);
 	tim6_cb = func;									// set function pointer to parameter function
 
 	__HAL_TIM_SET_AUTORELOAD(&htim6, time_ms);
@@ -424,6 +426,12 @@ void _tim_timeout_nonblocking_with_callback(uint32_t time_ms, void(*func)(void))
 	}
 }
 
+/**
+ * @brief 	Callback function for timer TIM6. Stops timer
+ * 			and calls function which was passed to "led_set_nonblocking_with_callback".
+ * @param	htim: 	TIM handle
+ * @retval	None
+ */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	if (htim == &htim6) {
 		HAL_TIM_Base_Stop_IT(&htim6);
@@ -432,6 +440,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
 }
 
+/**
+ * @brief 	Resets both LEDs.
+ * @param 	None
+ * @retval	None
+ */
 void reset_led() {
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
 	  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
