@@ -48,7 +48,7 @@ bool frame_check(char* frame) {
 	if (frame[strlen(frame)-1] != '\n') {
 		return false;
 	}
-	if (interval_low > interval_high) {
+	if (interval_low > interval_high || interval_low < INT_MIN || interval_low > INT_MAX || interval_high < INT_MIN || interval_high > INT_MAX) {
 		return false;
 	}
 
@@ -64,7 +64,6 @@ char* frame_number_gen(char* frame, RNG_HandleTypeDef hrng) {
 	int interval_low;
 	int interval_high;
 	char *ptr;
-//	char return_string[RETSTRINGLEN];
 	uint32_t random_number = 0;
 
 	if (frame[0] != '#') {
@@ -110,4 +109,12 @@ char* frame_number_gen(char* frame, RNG_HandleTypeDef hrng) {
 	}
 
 	return return_string;
+}
+
+bool ack_check(char* frame) {
+	if (strcmp(frame, "ACK\n") == 0) {
+		return true;
+	} else {
+		return false;
+	}
 }

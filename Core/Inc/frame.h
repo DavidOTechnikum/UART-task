@@ -13,11 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 
 #define RETSTRINGLEN 20
 
 bool frame_check(char* frame);
 char* frame_number_gen(char* frame, RNG_HandleTypeDef hrng);
+bool ack_check(char* frame);
 
 
 
